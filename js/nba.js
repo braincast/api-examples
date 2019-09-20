@@ -7,38 +7,25 @@ const maxYearFromUser = 2019;
 const positionFromUser = "center";
 const teamFromUser = "Lakers";
 
+const BasketballReferenceOpenAPITemplate = {
+	openAPISpec: Examples.OpenAPI.JSON.NBA, // the Open API Specification (OAS) of a REST data source for accessing the churn user data
+	path:"/query",  // the HTTP endpoint to use from the OAS spec
+	operation:"get",  // the HTTP method to use
+	params:{     // required values for parameters specified in the OAS
+		"apikey":     "AKIAIOSFODNNSLOE:Yxg83MZaEgh3OZ3l0rLo5RTX11o="
+	}
+};
+
 //
 // define and validate data sources
 //
 let stream = bc.Datastore.getStream("NBA.Example.Seasons");
 if (!stream) {
 	stream = bc.Datastore.defineStream(
-		"NBA.Example.Seasons",//source name
-		BC.Utils.SourceAdapters.createREST(Examples.Adapters.BasketballReferenceOpenAPITemplate),// REST adapter to fetch data created from the data source's Open API Specification
-		["Year","Player","Pos","Tm","G","GS","WS","MP","PER","BPM"] //fields from source to use in stream's output records
-	);
-	if (!stream || !stream.validate()) {
-		throw "Cannot access data source, reason: "+stream.validationErrorMsg;
-	}
-}
-
-//
-// build view
-//
-let view = bc.Datastore.getView("NBA.Example.nbaView");
-if (!view) {
-	//Create a view that outputs any new seasonal data from 1980, every year:
-	view = bc.Datastore.createView(
 		{
-			"inputSources": {// the sources of records inputted to the view (in other cases some of the input sources can be another view instead of a data source)
-				"playersSeasons": {
-					"source": stream,
-					"filter": {"where":"Year >= 1985"} // the filter for this source specifying that only the data for seasons after 1980 should be consumed
-				}
-			} // the input source will only be consumed once since this is the default when no consumption rate is specified
-		},
-		{
-			"outputRecordHeader": { // the structure of the output record where each property is the name of one of the record's attribute and the value is that attribute's description
+			"source": "NBA.Example.Seasons",//source name
+			"adapter": BC.Utils.SourceAdapters.createREST(BasketballReferenceOpenAPITemplate),// REST adapter to fetch data created from the data source's Open API Specification
+			"record": { // provide an object to specify which attributes of the records being fetched from the source should be used (if omitted, all attributes will be used) - each property is an attribute and the value is that attribute's description:
 				"Year":		     	"the season",
 				"Player":	     	"player's full name",
 				"Pos":		     	"player's position",
@@ -52,59 +39,20 @@ if (!view) {
 				"rankTeamMP":    	"the player's minutes played (MP) ranking compared to other players in his team and for same year",
 				"percentileYearWS": "the player's wins share (WS) percentile compared to other players in the league for the same year"
 			},
-			"outputRecordGenerator": function (inputRecordQueues) { // a function that specifies how data coming from the input sources is used to generate the view's output records whose structure must correspond to outputRecordHeader. This function will be invoked by the system after each input consumption step. inputRecordQueues is a set of queues, each holding the latest batch of consumed input data records for a specific input source (corresponding to that source's specified filter and in the order of consumption).
-				let years = {};
-				inputRecordQueues["playersSeasons"].forEach(record => {
-					let curYear = record["Year"];
-					if (!years[curYear]) {
-						years[curYear] = {"allPlayersWS": [], "teamSpecificMP": {}};
-					}
-					insertSorted(record["WS"],years[curYear]["allPlayersWS"]);
-					let curTeam = record["Tm"];
-					if (!years[curYear]["teamSpecificMP"][curTeam]) {
-						years[curYear]["teamSpecificMP"][curTeam] = [];
-					}
-					insertSorted(record["MP"],years[curYear]["teamSpecificMP"][curTeam]);
-				});
-				let outputRecordsQueue = [];
-				inputRecordQueues["playersSeasons"].forEach(record => {
-					let year = record["Year"];
-					let ws = record["WS"];
-					let team = record["Tm"];
-					let mp = record["MP"];
-					outputRecordsQueue[outputRecordsQueue.length] = {
-						"Year": year,
-						"Player": record["Player"],
-						"Pos": record["Pos"],
-						"Tm": team,
-						"G": record["G"],
-						"GS": record["GS"],
-						"WS": ws,
-						"MP": mp,
-						"PER": record["PER"],
-						"BPM": record["BPM"],
-						"rankTeamMP": rank(mp, years[year]["teamSpecificMP"][team]),
-						"percentileYearWS": percentile(ws, years[year]["allPlayersWS"])
-					};
-				});
-				return outputRecordsQueue;
-			}
+			"filter": {"where":"Year >= 1985"} // the filter for this source specifying that only the data after 1985 should be consumed
 		}
 	);
-
-	if (!view.validate()) {
-		throw "View does not work, reason: "+view.validationErrorMsg;
+	if (!stream || !stream.validate()) {
+		throw "Example stream cannot be accessed, reason: " + stream.validationErrorMsg;
 	}
-
-	view.save("NBA.Example.nbaView", false); // second parameter is whether to override an existing view
 }
 
 //
 // build scanner
 //
-if (!view.getScanner("myBestNBAPlayerTheory")) { // the name of the scanner and the patterns inside the scanner are in the namespace of the view
-	let scanner = view.createScanner(
-		{// make user specified values available for the scanner as scanner variables that can be accessed via the vars keyword (don't forget to update their values every time you scan the view, e.g. for different user queries)
+if (!stream.getScanner("myBestNBAPlayerTheory")) { // the name of the scanner and the patterns inside the scanner are in the namespace of the stream
+	let scanner = stream.createScanner(
+		{// make user specified values available for the scanner as scanner variables that can be accessed via the vars keyword (don't forget to update their values every time you scan the stream, e.g. for different user queries)
 			"minYearFromUser": undefined,
 			"maxYearFromUser": undefined,
 			"positionFromUser": undefined,
@@ -226,32 +174,14 @@ scanner.vars = {
 	"teamFromUser": teamFromUser
 };
 
-// run our scanner on the view
-result = view.scan("myBestNBAPlayerTheory");
+// run our scanner on the stream
+result = stream.scan("myBestNBAPlayerTheory");
 userRequirements = toUserRequestString(minYearFromUser,maxYearFromUser,positionFromUser,teamFromUser);
 alert("The best NBA player matching your requirements ("+userRequirements+") is "+result+ ".");
 
 //
 // helper functions:
 //
-function percentile(val, sortedArray) {
-	if(val<sortedArray[0]) return 0;
-	if(val>sortedArray[sortedArray.length-1]) return 100;
-	for (let i = 0; i < sortedArray.length-1; i++) {
-		if(val >= sortedArray[i] && val < sortedArray[i+1]) return 100 * (i+1)/sortedArray.length;
-	}
-}
-function rank(val, sortedArray) {
-	if(val<=sortedArray[0]) return sortedArray.length;
-	if(val>=sortedArray[sortedArray.length-1]) return 1;
-	for (let i = sortedArray.length-2; i > 0; i--) {
-		if(val >= sortedArray[i] && val < sortedArray[i+1]) return sortedArray.length-i;
-	}
-}
-function insertSorted(val, array) {
-	array.push(val);
-	array.sort(function (a, b) { return a-b; });
-}
 function toUserRequestString(minYearFromUser,maxYearFromUser,positionFromUser,teamFromUser) {
 	return	minYearFromUser?`Year >= ${minYearFromUser} `:""+
 	maxYearFromUser?`Year <= ${maxYearFromUser} `:""+

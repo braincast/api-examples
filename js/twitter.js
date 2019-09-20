@@ -19,90 +19,32 @@ const twitterAdapterTemplate = {
 let inputSources = {};
 let today = new Date();
 let pastWeekFilter = {"where":"created_at > "+today.getTime()+" - 1000*60*60*24*7"};
-followers.forEach(follower => {
-	let followerStream = bc.Datastore.getStream("Twitter.Example." + follower);
-	if (!followerStream) {
-		followerStream = bc.Datastore.defineStream(
-			"Twitter.Example." + follower,//source name
-			BC.Utils.SourceAdapters.createREST(twitterAdapterTemplate, {"params": {"user_id": follower}}),// Reuse adapter to fetch data for follower
-			["user_id", "created_at"] // specify which fields of the records being fetched from the source should be used to make up the stream's output record (if omitted, all fields will be used)
-		);
-		if (!followerStream || !followerStream.validate()) {
-			throw "Access to follower " + follower + "'s Twitter example feed does not work, reason: " + followerStream.validationErrorMsg;
-		}
-	}
-	inputSources[follower] = {
-		"source": followerStream, // the actual source
-		"filter": pastWeekFilter  // the filter for this source specifying that only the data for the past week should be consumed
-	};
-});
-
-let view = bc.Datastore.createView(
-	{
-		"inputSources": inputSources, // the sources of records inputted to the view
-		"rate": BC.Meta.Period.Day,  // the input consumption rate specifying that all available data from all the input sources should be consumed once every day (or BC.Meta.Period.Once which is the default)
-	}, // the input to the view, in this case a data source (can also be another view)
-	{
-		"outputRecordHeader": { // the structure of the output record where each property is the name of one of the record's attribute and the value is that attribute's description
-			"FiveMinuteIntervalOfWeek": "a value in the range [1,500] representing a 5 minute interval of the analyzed 7 day period, where [day1 at 00:00 - day1 at 00:05] is represented by 1 and [day7 at 23:55 - day7 at 24:00] is represented by 500",
-			"ActivitiesCount": "the activity level measured as the number of followers that were active during the associated FiveMinuteIntervalOfWeek",
-			"ActiveFollowers": "the number of distinct followers that were active during the associated FiveMinuteIntervalOfWeek",
-			"ActivitiesCountMax": "the maximum ActivitiesCount encountered during the analyzed 7 day period",
-			"ActiveFollowersMax": "the maximum ActiveFollowers encountered during the analyzed 7 day period"
-		},
-		"outputRecordGenerator": function (inputRecordQueues) { // a function that specifies how data coming from the input sources is used to generate the view's output records whose structure must correspond to outputRecordHeader. This function will be invoked by the system after each input consumption step. inputRecordQueues is a set of queues, each holding the latest batch of consumed input data records for a specific input source (corresponding to that source's specified filter and in the order of consumption).
-			let fiveMinIntervals = {};
-			let activitiesCountMax = 0;
-			let activeFollowersMax = 0;
-			followers.forEach(follower => {
-				inputRecordQueues[follower].forEach(record => {
-					let interval = BC.Meta.Period.fiveMinIntervalOfWeek(record.created_at,today);// calculate the five minute interval of the week ending today which contains record.created_at
-					if(!fiveMinIntervals[interval]){
-						fiveMinIntervals[interval]={"ActiveFollowers":0,"ActivitiesCount":0};
-					}
-					if (!fiveMinIntervals[interval][record.user_id]) {
-						fiveMinIntervals[interval][record.user_id] = 0;
-						fiveMinIntervals[interval]["ActiveFollowers"]++;
-						if (fiveMinIntervals[interval]["ActiveFollowers"] > activeFollowersMax) {
-							activeFollowersMax = fiveMinIntervals[interval]["ActiveFollowers"];
-						}
-					}
-					fiveMinIntervals[interval][record.user_id]++;
-					fiveMinIntervals[interval]["ActivitiesCount"]++;
-					if (fiveMinIntervals[interval]["ActivitiesCount"] > activitiesCountMax) {
-						activitiesCountMax = fiveMinIntervals[interval]["ActivitiesCount"];
-					}
-				})
-			});
-			let outputRecordsQueue = [];
-			for(let interval = 1; interval<=500; interval++){ // add output records in ascending 5 min interval of the week order
-				if(fiveMinIntervals[interval]) { // verify that data exists for this interval
-					outputRecordsQueue[outputRecordsQueue.length] = {
-						"FiveMinuteIntervalOfWeek": interval,
-						"ActivitiesCount": fiveMinIntervals[interval].ActivitiesCount,
-						"ActiveFollowers": fiveMinIntervals[interval].ActiveFollowers,
-						"ActivitiesCountMax": fiveMinIntervals[interval].ActivitiesCountMax,
-						"ActiveFollowersMax": fiveMinIntervals[interval].ActiveFollowersMax
-					};
-				}
-			}
-			return outputRecordsQueue;
-		}
-	}
-);
-
-
-if (!view.validate()) {
-	throw "View does not work, reason: "+view.validationErrorMsg;
+let stream = bc.Datastore.getStream("Twitter.Example.Activity");
+if (!stream) {
+    stream = bc.Datastore.defineStream(
+        {
+            "source": "Twitter.Example.Activity",//source name
+            "adapter": BC.Utils.SourceAdapters.createREST(twitterAdapterTemplate, {"params": {"follower_ids": followers}}),// Fetch data for list of follower ids
+            "record": { // provide an object to specify which attributes of the records being fetched from the source should be used (if omitted, all attributes will be used) - each property is an attribute and the value is that attribute's description:
+                "FiveMinuteIntervalOfWeek": "a value in the range [1,500] representing a 5 minute interval of the analyzed 7 day period, where [day1 at 00:00 - day1 at 00:05] is represented by 1 and [day7 at 23:55 - day7 at 24:00] is represented by 500",
+                "ActivitiesCount": "the activity level measured as the number of followers that were active during the associated FiveMinuteIntervalOfWeek",
+                "ActiveFollowers": "the number of distinct followers that were active during the associated FiveMinuteIntervalOfWeek",
+                "ActivitiesCountMax": "the maximum ActivitiesCount encountered during the analyzed 7 day period",
+                "ActiveFollowersMax": "the maximum ActiveFollowers encountered during the analyzed 7 day period"
+            },
+            "filter": pastWeekFilter, // the filter for this source specifying that only the data for the past week should be consumed
+            "rate": BC.Meta.Period.Day  // the input consumption rate specifying that all available data from the input source should be consumed once every day - can be BC.Meta.Period.Event for continuous consumption of records as they are generated or BC.Meta.Period.Once which is the default.
+        });
+    if (!stream || !stream.validate()) {
+        throw "Followers activity stream in Twitter example feed cannot be accessed, reason: " + stream.validationErrorMsg;
+    }
 }
-
-view.save("Twitter.Example.followersView", true); // second parameter is whether to override an existing view
 
 //
 // build scanner
 //
-if (!view.getScanner("myBestTimeToTweetTheory")) { // the name of the scanner and the patterns inside the scanner are in the namespace of the view
-	let twitterActivityScanner = view.createScanner();
+if (!stream.getScanner("myBestTimeToTweetTheory")) { // the name of the scanner and the patterns inside the scanner are in the namespace of the stream
+	let twitterActivityScanner = stream.createScanner();
 	twitterActivityScanner.addConstraint("constraint30min", // constraint name
 		function(curSequence) {
 			return  curSequence.records[curSequence.records.length-1].FiveMinuteIntervalOfWeek - curSequence.records[0].FiveMinuteIntervalOfWeek <= 6;
@@ -147,5 +89,5 @@ if (!view.getScanner("myBestTimeToTweetTheory")) { // the name of the scanner an
 	twitterActivityScanner.save("myBestTimeToTweetTheory", true); // override if such exists
 }
 
-// run our scanner on view
-view.scan("myBestTimeToTweetTheory");
+// run our scanner on stream
+stream.scan("myBestTimeToTweetTheory");

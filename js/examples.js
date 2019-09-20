@@ -143,9 +143,10 @@ Examples = {
                     }
                 }
             },
-            ProteinDataBank: {/*RYRY - need to create*/},
-            Twitter: {/*RYRY - need to create*/},
-            Churn: {/*RYRY - need to create*/}
+            ProteinDataBank: {/*TODO*/},
+            Twitter: {/*TODO*/},
+            Churn: {/*TODO*/},
+            NBA: {/*TODO*/}
         }
     },
     Adapters:{
@@ -154,6 +155,5 @@ Examples = {
         FlightsOpenAPITemplate:{/*TODO*/},
         SkiAPI:{/*TODO*/},
         CalendarAPITemplate:{/*TODO*/},
-
     }
 };
